@@ -9,40 +9,41 @@
 
 struct ip_key
 {
-    __u32 prefix;
+    __u32 prefixlen;
     __u32 ipv4_addr;
-};
+} __attribute__((packed));
 
-// 领域语义：存储已识别的实体 IP 及其对应的路由标记
+// LPM trie: prefix + ip
 struct
 {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
     __uint(max_entries, 65535);
     __type(key, struct ip_key);
-    __type(value, __u32); // 存储 PolicyMark
+    __type(value, __u32); // Mark
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } ip_marks SEC(".maps");
 
 SEC("classifier/egress")
 int do_mark(struct __sk_buff *skb)
 {
-    if (skb->protocol != bpf_htons(ETH_P_IP))
-        return TC_ACT_OK;
-
-    void *data_end = (void *)(long)skb->data_end;
     void *data = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
 
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
+        return TC_ACT_OK;
+
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
 
     struct iphdr *iph = (void *)(eth + 1);
     if ((void *)(iph + 1) > data_end)
         return TC_ACT_OK;
 
+    __u32 dst = bpf_ntohl(iph->daddr);
     struct ip_key key = {
-        .prefix = 32,
-        .ipv4_addr = iph->daddr};
+        .prefixlen = 32,
+        .ipv4_addr = dst};
 
     // 匹配领域实体 IP
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);

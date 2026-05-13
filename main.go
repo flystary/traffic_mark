@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
@@ -27,10 +28,10 @@ type TrafficObjects struct {
 
 func (o *TrafficObjects) Close() error {
 	if o.IpMarks != nil {
-		o.IpMarks.Close()
+		_ = o.IpMarks.Close()
 	}
 	if o.DoMark != nil {
-		o.DoMark.Close()
+		_ = o.DoMark.Close()
 	}
 	return nil
 }
@@ -41,6 +42,18 @@ func loadRules() map[string]uint32 {
 		"github.com": 200,
 		"baidu.com":  300,
 	}
+}
+
+func attachWithTC(iface string) error {
+	cmd := exec.Command(
+		"tc", "filter", "add",
+		"dev", iface,
+		"egress",
+		"bpf", "da",
+		"obj", "traffic_mark.o",
+		"sec", "classifier/egress",
+	)
+	return cmd.Run()
 }
 
 func main() {
@@ -54,31 +67,40 @@ func main() {
 		log.Fatalf("加载 eBPF 对象失败: %v", err)
 	}
 	defer objs.Close()
+
 	log.Printf("Map 指针: %p, Program 指针: %p", objs.IpMarks, objs.DoMark)
 
+	// Engine
 	engine := NewEngine(objs.IpMarks, loadRules())
 	if engine == nil {
-		log.Fatal("...")
+		log.Fatal("engine init failed")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ifaces, _ := net.Interfaces()
+	var links []link.Link
+
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+		if iface.Flags&net.FlagLoopback != 0 ||
+			iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		l, err := link.AttachTCX(link.TCXOptions{
-			Interface: iface.Index,
-			Program:   objs.DoMark,
-			Attach:    ebpf.AttachTCXEgress,
+		attachWithTC(iface.Name)
+
+		l, err := link.AttachRawLink(link.RawLinkOptions{
+			Program: objs.DoMark,
+			Attach:  ebpf.AttachType(3), // TC classifier
+			Target:  iface.Index,
 		})
+
 		if err != nil {
 			log.Printf("跳过网卡 %s: %v", iface.Name, err)
 			continue
 		}
-		defer l.Close()
+
+		links = append(links, l)
 		log.Printf("成功挂载网卡: %s", iface.Name)
 		/*
 			l, err := link.RawAttachProgram(link.RawAttachProgramOptions{
@@ -90,20 +112,19 @@ func main() {
 	}
 
 	// 热加载
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGHUP)
+	sigReload := make(chan os.Signal, 1)
+	signal.Notify(sigReload, syscall.SIGHUP)
 
 	go func() {
-		for range sigChan {
-			log.Println("收到 SIGHUP，重新加载域名列表...")
-			newRules := loadRules()
-			engine.Reload(newRules)
+		for range sigReload {
+			log.Println("SIGHUP: reload rules")
+			engine.Reload(loadRules())
 		}
 	}()
 
 	// 退出
-	exit := make(chan os.Signal, 1)
-	signal.Notify(exit, syscall.SIGINT, syscall.SIGTERM)
+	sigExit := make(chan os.Signal, 1)
+	signal.Notify(sigExit, syscall.SIGINT, syscall.SIGTERM)
 
 	go engine.Clean(ctx)
 	go WatchDNS(ctx, func(domain string, ip net.IP, ttl uint32) {
@@ -111,8 +132,14 @@ func main() {
 			engine.AddMapping(domain, ip, ttl)
 		}
 	})
+	log.Println("Traffic Engine started")
+	<-sigExit
 
-	log.Println("已启动， 输入 'kill -HUP <pid>' 触发配置重载。")
-	log.Println("Traffic Engine is running. Press Ctrl+C to exit.")
-	<-exit
+	log.Println("shutting down...")
+	for _, l := range links {
+		_ = l.Close()
+	}
+	cancel()
+
+	log.Println("bye")
 }

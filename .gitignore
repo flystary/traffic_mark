@@ -1,0 +1,6 @@
+.idea
+.vscode
+
+*.pcap
+/traffic_engine
+/*.o

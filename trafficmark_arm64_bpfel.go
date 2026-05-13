@@ -14,9 +14,9 @@ import (
 )
 
 type TrafficMarkIpKey struct {
-	_        structs.HostLayout
-	Prefix   uint32
-	Ipv4Addr uint32
+	_         structs.HostLayout
+	Prefixlen uint32
+	Ipv4Addr  uint32
 }
 
 // LoadTrafficMark returns the embedded CollectionSpec for TrafficMark.

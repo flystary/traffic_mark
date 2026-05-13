@@ -23,13 +23,14 @@ func WatchDNS(ctx context.Context, onDNS func(string, net.IP, uint32)) {
 	}
 	defer h.Close()
 
-	_ = h.SetBPFFilter("udp src port 53")
+	_ = h.SetBPFFilter("udp port 53 or tcp port 53")
 	src := gopacket.NewPacketSource(h, h.LinkType())
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
 		case packet, ok := <-src.Packets():
 			if !ok {
 				return
@@ -47,13 +48,25 @@ func WatchDNS(ctx context.Context, onDNS func(string, net.IP, uint32)) {
 			}
 
 			for _, ans := range dns.Answers {
-				// 仅处理 A 记录 (IPv4)
-				if ans.Type == layers.DNSTypeA && len(ans.IP) > 0 {
-					name := strings.ToLower(strings.TrimSuffix(string(ans.Name), "."))
 
-					// 执行回调
-					onDNS(name, ans.IP, ans.TTL)
+				if ans.Type != layers.DNSTypeA {
+					continue
 				}
+
+				if len(ans.IP) == 0 {
+					continue
+				}
+
+				name := strings.ToLower(
+					strings.TrimSuffix(string(ans.Name), "."),
+				)
+
+				ttl := ans.TTL
+				if ttl == 0 {
+					ttl = 60
+				}
+
+				onDNS(name, ans.IP, ttl)
 			}
 		}
 	}

@@ -11,6 +11,11 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type ipKey struct {
+	Prefixlen uint32
+	Addr      uint32
+}
+
 type Record struct {
 	Mark uint32
 	End  time.Time
@@ -45,12 +50,12 @@ func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
 		return
 	}
 
-	val := binary.BigEndian.Uint32(ip.To4())
+	ipv4 := binary.BigEndian.Uint32(ip.To4())
 	expire := time.Now().Add(time.Duration(ttl) * time.Second)
 
-	// 存入本地缓存和内核
-	e.cache.Store(val, Record{mark, expire})
-	e.syncToKernel(val, mark, false)
+	e.cache.Store(ipv4, Record{mark, expire})
+
+	e.syncToKernel(ipv4, mark, false)
 }
 
 func (e *Engine) syncToKernel(ip uint32, mark uint32, remove bool) {
@@ -58,9 +63,10 @@ func (e *Engine) syncToKernel(ip uint32, mark uint32, remove bool) {
 		return
 	}
 
-	key := make([]byte, 8)
-	binary.LittleEndian.PutUint32(key[0:4], 32)
-	binary.BigEndian.PutUint32(key[4:8], ip)
+	key := ipKey{
+		Prefixlen: 32,
+		Addr:      ip,
+	}
 
 	if remove {
 		_ = e.bpfMap.Delete(key)
@@ -78,7 +84,10 @@ func (e *Engine) Clean(ctx context.Context) {
 			return
 		case now := <-t.C:
 			e.cache.Range(func(k, v any) bool {
-				ip := k.(uint32)
+				ip, ok := k.(uint32)
+				if !ok {
+					return true
+				}
 				rec := v.(Record)
 				if now.After(rec.End) {
 					e.syncToKernel(ip, 0, true)
