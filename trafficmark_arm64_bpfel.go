@@ -61,7 +61,8 @@ type TrafficMarkSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type TrafficMarkProgramSpecs struct {
-	DoMark *ebpf.ProgramSpec `ebpf:"do_mark"`
+	DoMarkEgress  *ebpf.ProgramSpec `ebpf:"do_mark_egress"`
+	DoMarkIngress *ebpf.ProgramSpec `ebpf:"do_mark_ingress"`
 }
 
 // TrafficMarkMapSpecs contains maps before they are loaded into the kernel.
@@ -116,12 +117,14 @@ type TrafficMarkVariables struct {
 //
 // It can be passed to LoadTrafficMarkObjects or ebpf.CollectionSpec.LoadAndAssign.
 type TrafficMarkPrograms struct {
-	DoMark *ebpf.Program `ebpf:"do_mark"`
+	DoMarkEgress  *ebpf.Program `ebpf:"do_mark_egress"`
+	DoMarkIngress *ebpf.Program `ebpf:"do_mark_ingress"`
 }
 
 func (p *TrafficMarkPrograms) Close() error {
 	return _TrafficMarkClose(
-		p.DoMark,
+		p.DoMarkEgress,
+		p.DoMarkIngress,
 	)
 }
 

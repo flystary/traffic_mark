@@ -65,8 +65,9 @@ func WatchDNS(ctx context.Context, onDNS func(string, net.IP, uint32)) {
 				if ttl == 0 {
 					ttl = 60
 				}
-
-				onDNS(name, ans.IP, ttl)
+				addr := ans.IP
+				log.Printf("域名: %v -> IP: %v", name, addr)
+				onDNS(name, addr, ttl)
 			}
 		}
 	}

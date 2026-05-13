@@ -11,7 +11,7 @@ struct ip_key
 {
     __u32 prefixlen;
     __u32 ipv4_addr;
-} __attribute__((packed));
+};
 
 // LPM trie: prefix + ip
 struct
@@ -24,7 +24,7 @@ struct
 } ip_marks SEC(".maps");
 
 SEC("classifier/egress")
-int do_mark(struct __sk_buff *skb)
+int do_mark_egress(struct __sk_buff *skb)
 {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
@@ -40,17 +40,48 @@ int do_mark(struct __sk_buff *skb)
     if ((void *)(iph + 1) > data_end)
         return TC_ACT_OK;
 
-    __u32 dst = bpf_ntohl(iph->daddr);
     struct ip_key key = {
         .prefixlen = 32,
-        .ipv4_addr = dst};
+        .ipv4_addr = iph->daddr, // ✔ 正确：不做 ntohl
+    };
 
-    // 匹配领域实体 IP
+    bpf_printk("hit daddr=%x\n", bpf_ntohl(iph->daddr));
+
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
-    {
         skb->mark = *mark;
-    }
+
+    return TC_ACT_OK;
+}
+
+// 新增的 Ingress 钩子
+SEC("classifier/ingress")
+int do_mark_ingress(struct __sk_buff *skb)
+{
+    void *data = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return TC_ACT_OK;
+
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return TC_ACT_OK;
+
+    struct iphdr *iph = (void *)(eth + 1);
+    if ((void *)(iph + 1) > data_end)
+        return TC_ACT_OK;
+
+    struct ip_key key = {
+        .prefixlen = 32,
+        .ipv4_addr = iph->daddr, // ✔ 正确：不做 ntohl
+    };
+
+    bpf_printk("hit daddr=%x\n", bpf_ntohl(iph->daddr));
+
+    __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
+    if (mark)
+        skb->mark = *mark;
 
     return TC_ACT_OK;
 }

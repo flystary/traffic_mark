@@ -15,23 +15,27 @@ import (
 	"syscall"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 )
 
 type TrafficObjects struct {
 	// 对应 C 中的 ip_marks
 	IpMarks *ebpf.Map `ebpf:"ip_marks"`
-	// 对应 C 中的 SEC("classifier/egress") do_mark
-	DoMark *ebpf.Program `ebpf:"do_mark"`
+	// 对应 C 中的 SEC("classifier/egress") do_mark_egress
+	DoMarkEgress *ebpf.Program `ebpf:"do_mark_egress"`
+	// 对应 C 中的 SEC("classifier/egress") do_mark_ingress
+	DoMarkIngress *ebpf.Program `ebpf:"do_mark_ingress"`
 }
 
 func (o *TrafficObjects) Close() error {
 	if o.IpMarks != nil {
 		_ = o.IpMarks.Close()
 	}
-	if o.DoMark != nil {
-		_ = o.DoMark.Close()
+	if o.DoMarkEgress != nil {
+		_ = o.DoMarkEgress.Close()
+	}
+	if o.DoMarkIngress != nil {
+		_ = o.DoMarkIngress.Close()
 	}
 	return nil
 }
@@ -42,18 +46,6 @@ func loadRules() map[string]uint32 {
 		"github.com": 200,
 		"baidu.com":  300,
 	}
-}
-
-func attachWithTC(iface string) error {
-	cmd := exec.Command(
-		"tc", "filter", "add",
-		"dev", iface,
-		"egress",
-		"bpf", "da",
-		"obj", "traffic_mark.o",
-		"sec", "classifier/egress",
-	)
-	return cmd.Run()
 }
 
 func main() {
@@ -68,7 +60,7 @@ func main() {
 	}
 	defer objs.Close()
 
-	log.Printf("Map 指针: %p, Program 指针: %p", objs.IpMarks, objs.DoMark)
+	log.Printf("Map 指针: %p, Program指针 Egress: %p, Ingress: %p,", objs.IpMarks, objs.DoMarkEgress, objs.DoMarkIngress)
 
 	// Engine
 	engine := NewEngine(objs.IpMarks, loadRules())
@@ -80,37 +72,40 @@ func main() {
 	defer cancel()
 
 	ifaces, _ := net.Interfaces()
-	var links []link.Link
 
 	for _, iface := range ifaces {
+
 		if iface.Flags&net.FlagLoopback != 0 ||
 			iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		attachWithTC(iface.Name)
 
-		l, err := link.AttachRawLink(link.RawLinkOptions{
-			Program: objs.DoMark,
-			Attach:  ebpf.AttachType(3), // TC classifier
-			Target:  iface.Index,
-		})
+		_ = exec.Command("tc", "qdisc", "replace", "dev", iface.Name, "clsact").Run()
 
-		if err != nil {
-			log.Printf("跳过网卡 %s: %v", iface.Name, err)
+		// 1. 挂载 Egress (出站)
+		errEgress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
+			"egress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
+			"sec", "classifier/egress").Run()
+
+		if errEgress != nil {
+			log.Printf("Egress 挂载失败 %s: %v", iface.Name, errEgress)
+		}
+
+		// 2. 挂载 Ingress (入站)
+		errIngress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
+			"ingress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
+			"sec", "classifier/ingress").Run()
+
+		if errIngress != nil {
+			log.Printf("Ingress 挂载失败 %s: %v", iface.Name, errIngress)
+		}
+
+		if errEgress != nil && errIngress != nil {
 			continue
 		}
 
-		links = append(links, l)
-		log.Printf("成功挂载网卡: %s", iface.Name)
-		/*
-			l, err := link.RawAttachProgram(link.RawAttachProgramOptions{
-				Target:  iface.Index,
-				Program: objs.MarkProg,
-				Attach:  ebpf.AttachClassifierEgress,
-			})
-		*/
+		log.Printf("attached: %s", iface.Name)
 	}
-
 	// 热加载
 	sigReload := make(chan os.Signal, 1)
 	signal.Notify(sigReload, syscall.SIGHUP)
@@ -136,9 +131,6 @@ func main() {
 	<-sigExit
 
 	log.Println("shutting down...")
-	for _, l := range links {
-		_ = l.Close()
-	}
 	cancel()
 
 	log.Println("bye")
