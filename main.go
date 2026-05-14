@@ -55,8 +55,6 @@ func main() {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatalf("无法解除内存限制: %v", err)
 	}
-	const bpfFSPath = "/sys/fs/bpf"
-
 	// 先获取 Spec（这是配置蓝图），而不是直接 Load
 	spec, err := LoadTrafficMark()
 	if err != nil {
