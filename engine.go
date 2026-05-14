@@ -13,7 +13,7 @@ import (
 
 type ipKey struct {
 	Prefixlen uint32
-	Addr      uint32
+	Ipv4Addr  [4]byte // 使用 [4]byte 对应 C 的 __u8[4]
 }
 
 type Record struct {
@@ -43,35 +43,50 @@ func (e *Engine) Reload(rules map[string]uint32) {
 // AddMapping 收到 DNS 后更新
 func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
 	e.lock.RLock()
-	mark, exists := e.rules[domain]
+	var mark uint32
+	var exists bool
+	for ruleDomain, m := range e.rules {
+		if domain == ruleDomain || (len(domain) > len(ruleDomain) && domain[len(domain)-len(ruleDomain)-1] == '.' && domain[len(domain)-len(ruleDomain):] == ruleDomain) {
+			mark = m
+			exists = true
+			break
+		}
+	}
 	e.lock.RUnlock()
-
-	if !exists || ip.To4() == nil {
+	ipv4 := ip.To4()
+	if !exists || ipv4 == nil {
 		return
 	}
 
-	ipv4 := binary.BigEndian.Uint32(ip.To4())
+	ipUint := binary.BigEndian.Uint32(ipv4)
 	expire := time.Now().Add(time.Duration(ttl) * time.Second)
 
-	e.cache.Store(ipv4, Record{mark, expire})
+	e.cache.Store(ipUint, Record{mark, expire})
 
-	e.syncToKernel(ipv4, mark, false)
+	e.syncToKernel(ipUint, mark, false)
+	log.Printf("写入内核成功: %s (%d) -> Mark: %d", domain, ipUint, mark)
 }
 
 func (e *Engine) syncToKernel(ip uint32, mark uint32, remove bool) {
 	if e == nil || e.bpfMap == nil {
 		return
 	}
+	var addr [4]byte
+	binary.BigEndian.PutUint32(addr[:], ip)
 
 	key := ipKey{
 		Prefixlen: 32,
-		Addr:      ip,
+		Ipv4Addr:  addr,
 	}
 
+	var err error
 	if remove {
-		_ = e.bpfMap.Delete(key)
+		err = e.bpfMap.Delete(key)
 	} else {
-		_ = e.bpfMap.Put(key, mark)
+		err = e.bpfMap.Put(key, mark)
+	}
+	if err != nil {
+		log.Printf("BPF Map 操作失败 (remove=%v): %v", remove, err)
 	}
 }
 

@@ -10,8 +10,8 @@
 struct ip_key
 {
     __u32 prefixlen;
-    __u32 ipv4_addr;
-};
+    __u8 ipv4_addr[4]; // 使用数组避免任何可能的对齐歧义
+} __attribute__((packed));
 
 // LPM trie: prefix + ip
 struct
@@ -21,6 +21,7 @@ struct
     __type(key, struct ip_key);
     __type(value, __u32); // Mark
     __uint(map_flags, BPF_F_NO_PREALLOC);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } ip_marks SEC(".maps");
 
 SEC("classifier/egress")
@@ -33,6 +34,8 @@ int do_mark_egress(struct __sk_buff *skb)
     if ((void *)(eth + 1) > data_end)
         return TC_ACT_OK;
 
+    __u16 proto = bpf_ntohs(skb->protocol);
+    bpf_printk("EGRESS: len=%d, proto=0x%x\n", skb->len, proto);
     if (eth->h_proto != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
 
@@ -42,14 +45,15 @@ int do_mark_egress(struct __sk_buff *skb)
 
     struct ip_key key = {
         .prefixlen = 32,
-        .ipv4_addr = iph->daddr, // ✔ 正确：不做 ntohl
+        .ipv4_addr = iph->daddr,
     };
-
-    bpf_printk("hit daddr=%x\n", bpf_ntohl(iph->daddr));
 
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
+    {
         skb->mark = *mark;
+        bpf_printk("MATCH! daddr=%x, mark=%d\n", bpf_ntohl(iph->daddr), *mark);
+    }
 
     return TC_ACT_OK;
 }
@@ -64,6 +68,8 @@ int do_mark_ingress(struct __sk_buff *skb)
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
         return TC_ACT_OK;
+    __u16 proto = bpf_ntohs(skb->protocol);
+    bpf_printk("EGRESS: len=%d, proto=0x%x\n", skb->len, proto);
 
     if (eth->h_proto != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
@@ -74,14 +80,15 @@ int do_mark_ingress(struct __sk_buff *skb)
 
     struct ip_key key = {
         .prefixlen = 32,
-        .ipv4_addr = iph->daddr, // ✔ 正确：不做 ntohl
+        .ipv4_addr = iph->saddr,
     };
-
-    bpf_printk("hit daddr=%x\n", bpf_ntohl(iph->daddr));
 
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
+    {
         skb->mark = *mark;
+        bpf_printk("MATCH! saddr=%x, mark=%d\n", bpf_ntohl(iph->saddr), *mark);
+    }
 
     return TC_ACT_OK;
 }

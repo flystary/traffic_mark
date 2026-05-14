@@ -48,14 +48,37 @@ func loadRules() map[string]uint32 {
 	}
 }
 
+const bpfFSPath = "/sys/fs/bpf"
+
 func main() {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatalf("无法解除内存限制: %v", err)
 	}
+	const bpfFSPath = "/sys/fs/bpf"
+
+	// 先获取 Spec（这是配置蓝图），而不是直接 Load
+	spec, err := LoadTrafficMark()
+	if err != nil {
+		log.Fatalf("无法加载 TrafficMark Spec: %v", err)
+	}
+
+	// 在真正加载到内核前，修改 Map 的 Pinning 策略
+	if m, ok := spec.Maps["ip_marks"]; ok {
+		m.Pinning = ebpf.PinByName
+	} else {
+		log.Fatal("在 Spec 中找不到 ip_marks Map")
+	}
+
+	var objs TrafficObjects
+	opts := ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			// 它告诉 ebpf 库：如果 Map 设置了 PinByName，请把它放在这个目录下
+			PinPath: bpfFSPath,
+		},
+	}
 
 	// 加载 eBPF
-	var objs TrafficObjects
-	if err := LoadTrafficMarkObjects(&objs, nil); err != nil {
+	if err := LoadTrafficMarkObjects(&objs, &opts); err != nil {
 		log.Fatalf("加载 eBPF 对象失败: %v", err)
 	}
 	defer objs.Close()
@@ -80,18 +103,10 @@ func main() {
 			continue
 		}
 
+		_ = exec.Command("tc", "qdisc", "del", "dev", iface.Name, "clsact").Run()
 		_ = exec.Command("tc", "qdisc", "replace", "dev", iface.Name, "clsact").Run()
 
-		// 1. 挂载 Egress (出站)
-		errEgress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
-			"egress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
-			"sec", "classifier/egress").Run()
-
-		if errEgress != nil {
-			log.Printf("Egress 挂载失败 %s: %v", iface.Name, errEgress)
-		}
-
-		// 2. 挂载 Ingress (入站)
+		// 1. 挂载 Ingress (入站)
 		errIngress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
 			"ingress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
 			"sec", "classifier/ingress").Run()
@@ -100,11 +115,20 @@ func main() {
 			log.Printf("Ingress 挂载失败 %s: %v", iface.Name, errIngress)
 		}
 
+		// 2. 挂载 Egress (出站)
+		errEgress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
+			"egress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
+			"sec", "classifier/egress").Run()
+
+		if errEgress != nil {
+			log.Printf("Egress 挂载失败 %s: %v", iface.Name, errEgress)
+		}
+
 		if errEgress != nil && errIngress != nil {
 			continue
 		}
 
-		log.Printf("attached: %s", iface.Name)
+		log.Printf("已挂载: %s", iface.Name)
 	}
 	// 热加载
 	sigReload := make(chan os.Signal, 1)
