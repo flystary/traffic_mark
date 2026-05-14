@@ -10,9 +10,8 @@
 struct ip_key
 {
     __u32 prefixlen;
-    __u32 addr;
+    __u8 addr[4];
 } __attribute__((packed));
-
 // LPM trie: prefix + ip
 struct
 {
@@ -41,16 +40,17 @@ int do_mark_egress(struct __sk_buff *skb)
     if ((void *)(iph + 1) > data_end)
         return TC_ACT_OK;
 
+    bpf_printk("Egress dstIP Access: %pI4", &iph->daddr);
     struct ip_key key = {
         .prefixlen = 32,
-        .addr = iph->daddr,
     };
+    __builtin_memcpy(key.addr, &iph->daddr, 4);
 
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
     {
         skb->mark = *mark;
-        bpf_printk("MATCH! daddr=%x, mark=%d\n",
+        bpf_printk("Match! daddr=%x, mark=%d\n",
                    bpf_ntohl(iph->daddr),
                    *mark);
     }
@@ -76,16 +76,17 @@ int do_mark_ingress(struct __sk_buff *skb)
     if ((void *)(iph + 1) > data_end)
         return TC_ACT_OK;
 
+    // bpf_printk("Ingress srcIP Access: %pI4", &iph->daddr);
     struct ip_key key = {
         .prefixlen = 32,
-        .addr = iph->saddr,
     };
+    __builtin_memcpy(key.addr, &iph->saddr, 4);
 
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
     {
         skb->mark = *mark;
-        bpf_printk("MATCH! saddr=%x, mark=%d\n",
+        bpf_printk("Match! saddr=%x, mark=%d\n",
                    bpf_ntohl(iph->saddr),
                    *mark);
     }
