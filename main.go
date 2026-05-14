@@ -3,7 +3,7 @@ package main
 // 执行此指令会生成两组文件：trafficmark_bpfel.go (小端) 和 trafficmark_bpfeb.go (大端)
 // "TrafficMark" 是生成结构体的前缀名
 // "traffic_mark.bpf.c" 是源文件
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target arm64 -cflags "-I/usr/include/aarch64-linux-gnu" TrafficMark traffic_mark.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64 -cflags "-I/usr/include/x86_64-linux-gnu" TrafficMark traffic_mark.bpf.c
 
 import (
 	"context"
@@ -45,10 +45,13 @@ func loadRules() map[string]uint32 {
 		"google.com": 100,
 		"github.com": 200,
 		"baidu.com":  300,
+	        "shifen.com": 300,
 	}
 }
 
 const bpfFSPath = "/sys/fs/bpf"
+
+
 
 func main() {
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -82,6 +85,16 @@ func main() {
 		log.Fatalf("加载 eBPF 对象失败: %v", err)
 	}
 	defer objs.Close()
+	os.Remove(bpfFSPath + "/prog_egress")
+	os.Remove(bpfFSPath + "/prog_ingress")
+	os.Remove(bpfFSPath + "/ip_marks")
+
+	if err := objs.DoMarkEgress.Pin(bpfFSPath + "/prog_egress"); err != nil {
+		log.Fatalf("无法 Pin Egress 程序: %v", err)
+	}
+	if err := objs.DoMarkIngress.Pin(bpfFSPath + "/prog_ingress"); err != nil {
+		log.Fatalf("无法 Pin Ingress 程序: %v", err)
+	}
 
 	log.Printf("Map 指针: %p, Program指针 Egress: %p, Ingress: %p,", objs.IpMarks, objs.DoMarkEgress, objs.DoMarkIngress)
 
@@ -104,24 +117,19 @@ func main() {
 		}
 
 		_ = exec.Command("tc", "qdisc", "del", "dev", iface.Name, "clsact").Run()
-		_ = exec.Command("tc", "qdisc", "replace", "dev", iface.Name, "clsact").Run()
+		_ = exec.Command("tc", "qdisc", "add", "dev", iface.Name, "clsact").Run()
 
-		// 1. 挂载 Ingress (入站)
-		errIngress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
-			"ingress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
-			"sec", "classifier/ingress").Run()
-
-		if errIngress != nil {
-			log.Printf("Ingress 挂载失败 %s: %v", iface.Name, errIngress)
-		}
-
-		// 2. 挂载 Egress (出站)
+		// 挂载 Egress (出站)
 		errEgress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
-			"egress", "bpf", "da", "obj", "trafficmark_arm64_bpfel.o",
-			"sec", "classifier/egress").Run()
-
+			"egress", "bpf", "da", "pinned", bpfFSPath+"/prog_egress").Run()
 		if errEgress != nil {
 			log.Printf("Egress 挂载失败 %s: %v", iface.Name, errEgress)
+		}
+		// 挂载 Ingress (入站)
+		errIngress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
+			"ingress", "bpf", "da", "pinned", bpfFSPath+"/prog_ingress").Run()
+		if errIngress != nil {
+			log.Printf("Ingress 挂载失败 %s: %v", iface.Name, errIngress)
 		}
 
 		if errEgress != nil && errIngress != nil {
@@ -159,3 +167,4 @@ func main() {
 
 	log.Println("bye")
 }
+

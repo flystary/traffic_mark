@@ -2,19 +2,21 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"log"
+	"encoding/binary"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/cilium/ebpf"
 )
-
+type ipKeyRaw [8]byte
+/*
 type ipKey struct {
 	Prefixlen uint32
-	Ipv4Addr  uint32
+	Ipv4Addr  [4]byte
 }
+*/
 
 type Record struct {
 	Mark uint32
@@ -53,29 +55,35 @@ func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
 		}
 	}
 	e.lock.RUnlock()
+
 	ipv4 := ip.To4()
 	if !exists || ipv4 == nil {
 		return
 	}
 
-	ipUint := binary.BigEndian.Uint32(ipv4)
+	var addr [4]byte
+	copy(addr[:], ipv4)
 	expire := time.Now().Add(time.Duration(ttl) * time.Second)
 
-	e.cache.Store(ipUint, Record{mark, expire})
+	e.cache.Store(addr, Record{mark, expire})
 
-	e.syncToKernel(ipUint, mark, false)
-	log.Printf("写入内核成功: %s (%d) -> Mark: %d", domain, ipUint, mark)
+	e.syncToKernel(addr, mark, false)
+	log.Printf("写入内核成功: %s (%d) -> Mark: %d", domain, addr[:], mark)
 }
 
-func (e *Engine) syncToKernel(ip uint32, mark uint32, remove bool) {
+func (e *Engine) syncToKernel(ip [4]byte, mark uint32, remove bool) {
 	if e == nil || e.bpfMap == nil {
 		return
 	}
+	var key ipKeyRaw
+	/*
 	key := ipKey{
 		Prefixlen: 32,
 		Ipv4Addr:  ip,
 	}
-
+        */
+	binary.LittleEndian.PutUint32(key[0:4], 32)
+	copy(key[4:8], ip[:])
 	var err error
 	if remove {
 		err = e.bpfMap.Delete(key)
@@ -96,14 +104,12 @@ func (e *Engine) Clean(ctx context.Context) {
 			return
 		case now := <-t.C:
 			e.cache.Range(func(k, v any) bool {
-				ip, ok := k.(uint32)
-				if !ok {
-					return true
-				}
+			        ip, ok := k.([4]byte)
+				if !ok { return true}
 				rec := v.(Record)
 				if now.After(rec.End) {
 					e.syncToKernel(ip, 0, true)
-					e.cache.Delete(ip)
+					e.cache.Delete(k)
 				}
 				return true
 			})
