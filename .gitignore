@@ -3,4 +3,7 @@
 
 *.pcap
 /traffic_engine
+/dataplane/loader
+/dataplane/traffic_loader
 /*.o
+/ebpf
