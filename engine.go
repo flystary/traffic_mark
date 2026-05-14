@@ -13,7 +13,7 @@ import (
 
 type ipKey struct {
 	Prefixlen uint32
-	Ipv4Addr  [4]byte // 使用 [4]byte 对应 C 的 __u8[4]
+	Ipv4Addr  uint32
 }
 
 type Record struct {
@@ -71,12 +71,9 @@ func (e *Engine) syncToKernel(ip uint32, mark uint32, remove bool) {
 	if e == nil || e.bpfMap == nil {
 		return
 	}
-	var addr [4]byte
-	binary.BigEndian.PutUint32(addr[:], ip)
-
 	key := ipKey{
 		Prefixlen: 32,
-		Ipv4Addr:  addr,
+		Ipv4Addr:  ip,
 	}
 
 	var err error
