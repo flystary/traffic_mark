@@ -44,25 +44,42 @@ func (e *Engine) Reload(rules map[string]uint32) {
 	log.Printf("成功加载 %d 条新策略", len(rules))
 }
 
-// AddMapping 收到 DNS 后更新
-func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
+func (e *Engine) getMark(domain string) (uint32, bool) {
 	e.lock.RLock()
-	var mark uint32
-	var exists bool
+	defer e.lock.RUnlock()
+
+	// 完全匹配
+	if m, ok := e.rules[domain]; ok {
+		return m, true
+	}
+
+	// 后缀匹配 (如: sub.example.com 匹配 example.com)
 	for ruleDomain, m := range e.rules {
-		if domain == ruleDomain || (len(domain) > len(ruleDomain) && domain[len(domain)-len(ruleDomain)-1] == '.' && domain[len(domain)-len(ruleDomain):] == ruleDomain) {
-			mark = m
-			exists = true
-			break
+		if len(domain) > len(ruleDomain) &&
+			domain[len(domain)-len(ruleDomain)-1] == '.' &&
+			domain[len(domain)-len(ruleDomain):] == ruleDomain {
+			return m, true
 		}
 	}
-	e.lock.RUnlock()
+	return 0, false
+}
+
+// AddMapping 收到 DNS 后更新
+func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
 	ipv4 := ip.To4()
-	if !exists || ipv4 == nil {
+	if ipv4 == nil {
 		return
 	}
+	mark, ok := e.getMark(domain)
+	if !ok {
+		return
+	}
+
 	var addr [4]byte
 	copy(addr[:], ipv4)
+	if ttl < 10 {
+		ttl = 20
+	}
 	expire := time.Now().Add(time.Duration(ttl) * time.Second)
 
 	e.cache.Store(addr, Record{mark, expire})
