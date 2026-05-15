@@ -82,6 +82,7 @@ func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
 	}
 	expire := time.Now().Add(time.Duration(ttl) * time.Second)
 
+	// 更新缓存
 	e.cache.Store(addr, Record{mark, expire})
 
 	e.syncToKernel(addr, mark, false)
@@ -94,7 +95,6 @@ func (e *Engine) syncToKernel(ip [4]byte, mark uint32, remove bool) {
 	}
 	var key ipKeyRaw
 	binary.LittleEndian.PutUint32(key[0:4], 32)
-	// copy(key[4:8], ip[:])
 	// key := ipKey{
 	// 	Prefixlen: 32,
 	// 	Ipv4Addr:  ip,
@@ -114,12 +114,13 @@ func (e *Engine) syncToKernel(ip [4]byte, mark uint32, remove bool) {
 
 // Clean 定时清理过期 IP
 func (e *Engine) Clean(ctx context.Context) {
-	t := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-t.C:
+		case now := <-ticker.C:
+			count := 0
 			e.cache.Range(func(k, v any) bool {
 				ip, ok := k.([4]byte)
 				if !ok {
@@ -130,9 +131,13 @@ func (e *Engine) Clean(ctx context.Context) {
 					log.Printf("【清理触发】域名过期，正在从内核删除 IP: %v", ip)
 					e.syncToKernel(ip, 0, true)
 					e.cache.Delete(ip)
+					count++
 				}
 				return true
 			})
+			if count > 0 {
+				log.Printf("[Cleanup] 已从内核清除 %d 条过期记录", count)
+			}
 		}
 	}
 }
