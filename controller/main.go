@@ -1,4 +1,4 @@
-package bak
+package main
 
 // 执行此指令会生成两组文件：trafficmark_bpfel.go (小端) 和 trafficmark_bpfeb.go (大端)
 // "TrafficMark" 是生成结构体的前缀名
@@ -38,15 +38,6 @@ func (o *TrafficObjects) Close() error {
 		_ = o.DoMarkIngress.Close()
 	}
 	return nil
-}
-
-func loadRules() map[string]uint32 {
-	return map[string]uint32{
-		"google.com": 100,
-		"github.com": 200,
-		"baidu.com":  300,
-		"shifen.com": 300,
-	}
 }
 
 const bpfFSPath = "/sys/fs/bpf"

@@ -40,7 +40,7 @@ int do_mark_egress(struct __sk_buff *skb)
     if ((void *)(iph + 1) > data_end)
         return TC_ACT_OK;
 
-    bpf_printk("Egress dstIP Access: %pI4", &iph->daddr);
+    // bpf_printk("Egress dstIP Access: %pI4", &iph->daddr);
     struct ip_key key = {
         .prefixlen = 32,
     };

@@ -1,6 +1,5 @@
 package main
 
-
 import (
 	"context"
 	"log"
@@ -11,15 +10,6 @@ import (
 
 	"github.com/cilium/ebpf"
 )
-
-func loadRules() map[string]uint32 {
-	return map[string]uint32{
-		"google.com": 100,
-		"github.com": 200,
-		"baidu.com":  300,
-		"shifen.com": 300,
-	}
-}
 
 const bpfFSPath = "/sys/fs/bpf/ip_marks"
 
@@ -32,7 +22,7 @@ func main() {
 	defer bpfMap.Close()
 
 	// Engine
-	engine := NewEngine(bpfMap, loadRules())
+	engine := NewEngine(bpfMap, LoadRules())
 	if engine == nil {
 		log.Fatal("engine init failed")
 	}
@@ -46,7 +36,7 @@ func main() {
 	go func() {
 		for range sigReload {
 			log.Println("SIGHUP: reload rules")
-			engine.Reload(loadRules())
+			engine.Reload(LoadRules())
 		}
 	}()
 
