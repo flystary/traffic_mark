@@ -44,27 +44,45 @@ func (e *Engine) Reload(rules map[string]uint32) {
 	log.Printf("成功加载 %d 条新策略", len(rules))
 }
 
-// AddMapping 收到 DNS 后更新
-func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
+func (e *Engine) getMark(domain string) (uint32, bool) {
 	e.lock.RLock()
-	var mark uint32
-	var exists bool
+	defer e.lock.RUnlock()
+
+	// 完全匹配
+	if m, ok := e.rules[domain]; ok {
+		return m, true
+	}
+
+	// 后缀匹配 (如: sub.example.com 匹配 example.com)
 	for ruleDomain, m := range e.rules {
-		if domain == ruleDomain || (len(domain) > len(ruleDomain) && domain[len(domain)-len(ruleDomain)-1] == '.' && domain[len(domain)-len(ruleDomain):] == ruleDomain) {
-			mark = m
-			exists = true
-			break
+		if len(domain) > len(ruleDomain) &&
+			domain[len(domain)-len(ruleDomain)-1] == '.' &&
+			domain[len(domain)-len(ruleDomain):] == ruleDomain {
+			return m, true
 		}
 	}
-	e.lock.RUnlock()
+	return 0, false
+}
+
+// AddMapping 收到 DNS 后更新
+func (e *Engine) AddMapping(domain string, ip net.IP, ttl uint32) {
 	ipv4 := ip.To4()
-	if !exists || ipv4 == nil {
+	if ipv4 == nil {
 		return
 	}
+	mark, ok := e.getMark(domain)
+	if !ok {
+		return
+	}
+
 	var addr [4]byte
 	copy(addr[:], ipv4)
+	if ttl < 10 {
+		ttl = 20
+	}
 	expire := time.Now().Add(time.Duration(ttl) * time.Second)
 
+	// 更新缓存
 	e.cache.Store(addr, Record{mark, expire})
 
 	e.syncToKernel(addr, mark, false)
@@ -77,7 +95,6 @@ func (e *Engine) syncToKernel(ip [4]byte, mark uint32, remove bool) {
 	}
 	var key ipKeyRaw
 	binary.LittleEndian.PutUint32(key[0:4], 32)
-	// copy(key[4:8], ip[:])
 	// key := ipKey{
 	// 	Prefixlen: 32,
 	// 	Ipv4Addr:  ip,
@@ -97,12 +114,13 @@ func (e *Engine) syncToKernel(ip [4]byte, mark uint32, remove bool) {
 
 // Clean 定时清理过期 IP
 func (e *Engine) Clean(ctx context.Context) {
-	t := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-t.C:
+		case now := <-ticker.C:
+			count := 0
 			e.cache.Range(func(k, v any) bool {
 				ip, ok := k.([4]byte)
 				if !ok {
@@ -113,9 +131,13 @@ func (e *Engine) Clean(ctx context.Context) {
 					log.Printf("【清理触发】域名过期，正在从内核删除 IP: %v", ip)
 					e.syncToKernel(ip, 0, true)
 					e.cache.Delete(ip)
+					count++
 				}
 				return true
 			})
+			if count > 0 {
+				log.Printf("[Cleanup] 已从内核清除 %d 条过期记录", count)
+			}
 		}
 	}
 }

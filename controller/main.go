@@ -1,7 +1,5 @@
 package main
 
-// 执行此指令会生成两组文件：trafficmark_bpfel.go (小端) 和 trafficmark_bpfeb.go (大端)
-// "TrafficMark" 是生成结构体的前缀名
 // "traffic_mark.bpf.c" 是源文件
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target arm64 -cflags "-I/usr/include/aarch64-linux-gnu" TrafficMark traffic_mark.bpf.c
 
@@ -10,61 +8,44 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
 )
 
-type TrafficObjects struct {
-	// 对应 C 中的 ip_marks
-	IpMarks *ebpf.Map `ebpf:"ip_marks"`
-	// 对应 C 中的 SEC("classifier/egress") do_mark_egress
-	DoMarkEgress *ebpf.Program `ebpf:"do_mark_egress"`
-	// 对应 C 中的 SEC("classifier/egress") do_mark_ingress
-	DoMarkIngress *ebpf.Program `ebpf:"do_mark_ingress"`
-}
-
-func (o *TrafficObjects) Close() error {
-	if o.IpMarks != nil {
-		_ = o.IpMarks.Close()
-	}
-	if o.DoMarkEgress != nil {
-		_ = o.DoMarkEgress.Close()
-	}
-	if o.DoMarkIngress != nil {
-		_ = o.DoMarkIngress.Close()
-	}
-	return nil
-}
-
 const bpfFSPath = "/sys/fs/bpf"
 
 func main() {
+	// 解除内存锁限制（eBPF 必须）
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatalf("无法解除内存限制: %v", err)
 	}
-	// 先获取 Spec（这是配置蓝图），而不是直接 Load
+	// 信号与上下文管理
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 加载 eBPF 资源
+	if err := os.MkdirAll(bpfFSPath, 0755); err != nil {
+		log.Fatalf("Failed to create bpf fs directory: %v", err)
+	}
+
 	spec, err := LoadTrafficMark()
 	if err != nil {
-		log.Fatalf("无法加载 TrafficMark Spec: %v", err)
+		log.Fatalf("Failed to load bpf spec: %v", err)
 	}
 
 	// 在真正加载到内核前，修改 Map 的 Pinning 策略
 	if m, ok := spec.Maps["ip_marks"]; ok {
 		m.Pinning = ebpf.PinByName
-	} else {
-		log.Fatal("在 Spec 中找不到 ip_marks Map")
 	}
 
 	var objs TrafficObjects
 	opts := ebpf.CollectionOptions{
-		Maps: ebpf.MapOptions{
-			// 它告诉 ebpf 库：如果 Map 设置了 PinByName，请把它放在这个目录下
-			PinPath: bpfFSPath,
-		},
+		Maps: ebpf.MapOptions{PinPath: bpfFSPath},
 	}
 
 	// 加载 eBPF
@@ -72,85 +53,67 @@ func main() {
 		log.Fatalf("加载 eBPF 对象失败: %v", err)
 	}
 	defer objs.Close()
-	os.Remove(bpfFSPath + "/prog_egress")
-	os.Remove(bpfFSPath + "/prog_ingress")
-	os.Remove(bpfFSPath + "/ip_marks")
 
-	if err := objs.DoMarkEgress.Pin(bpfFSPath + "/prog_egress"); err != nil {
+	progEgressPath := filepath.Join(bpfFSPath, "prog_egress")
+	progIngressPath := filepath.Join(bpfFSPath, "prog_ingress")
+
+	// 强制刷新 Pin 文件
+	os.Remove(progEgressPath)
+	os.Remove(progIngressPath)
+
+	if err := objs.DoMarkEgress.Pin(progEgressPath); err != nil {
 		log.Fatalf("无法 Pin Egress 程序: %v", err)
 	}
-	if err := objs.DoMarkIngress.Pin(bpfFSPath + "/prog_ingress"); err != nil {
+	if err := objs.DoMarkIngress.Pin(progIngressPath); err != nil {
 		log.Fatalf("无法 Pin Ingress 程序: %v", err)
 	}
 
-	log.Printf("Map 指针: %p, Program指针 Egress: %p, Ingress: %p,", objs.IpMarks, objs.DoMarkEgress, objs.DoMarkIngress)
+	// log.Printf("Map 指针: %p, Program指针 Egress: %p, Ingress: %p,", objs.IpMarks, objs.DoMarkEgress, objs.DoMarkIngress)
 
 	// Engine
-	engine := NewEngine(objs.IpMarks, loadRules())
+	// 加载域名规则映射（例如：*.google.com -> Mark 10）
+	engine := NewEngine(objs.IpMarks, LoadRules())
 	if engine == nil {
 		log.Fatal("engine init failed")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// 初始化网卡挂载管理器
+	ifaceMgr := NewInterfaceManager(progEgressPath, progIngressPath)
 
-	ifaces, _ := net.Interfaces()
+	// 动态网卡监听与 TC 挂载
+	go ifaceMgr.Watch(ctx)
 
-	for _, iface := range ifaces {
+	// 过期 IP 自动清理
+	go engine.Clean(ctx)
 
-		if iface.Flags&net.FlagLoopback != 0 ||
-			iface.Flags&net.FlagUp == 0 {
-			continue
-		}
+	// DNS 流量审计与学习
+	go WatchDNS(ctx, func(domain string, ip net.IP, ttl uint32) {
+		// 当拦截到 DNS 响应时，Engine 会自动根据 rules 决定是否写入 BPF Map
+		engine.AddMapping(domain, ip, ttl)
+	})
 
-		_ = exec.Command("tc", "qdisc", "del", "dev", iface.Name, "clsact").Run()
-		_ = exec.Command("tc", "qdisc", "add", "dev", iface.Name, "clsact").Run()
-
-		// 挂载 Egress (出站)
-		errEgress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
-			"egress", "bpf", "da", "pinned", bpfFSPath+"/prog_egress").Run()
-		if errEgress != nil {
-			log.Printf("Egress 挂载失败 %s: %v", iface.Name, errEgress)
-		}
-		// 挂载 Ingress (入站)
-		errIngress := exec.Command("tc", "filter", "replace", "dev", iface.Name,
-			"ingress", "bpf", "da", "pinned", bpfFSPath+"/prog_ingress").Run()
-		if errIngress != nil {
-			log.Printf("Ingress 挂载失败 %s: %v", iface.Name, errIngress)
-		}
-
-		if errEgress != nil && errIngress != nil {
-			continue
-		}
-
-		log.Printf("已挂载: %s", iface.Name)
-	}
 	// 热加载
 	sigReload := make(chan os.Signal, 1)
 	signal.Notify(sigReload, syscall.SIGHUP)
 
 	go func() {
-		for range sigReload {
-			log.Println("SIGHUP: reload rules")
-			engine.Reload(loadRules())
+		for {
+			select {
+			case <-sigReload:
+				log.Println("SIGHUP received, reloading rules...")
+				engine.Reload(LoadRules())
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	// 退出
-	sigExit := make(chan os.Signal, 1)
-	signal.Notify(sigExit, syscall.SIGINT, syscall.SIGTERM)
-
-	go engine.Clean(ctx)
-	go WatchDNS(ctx, func(domain string, ip net.IP, ttl uint32) {
-		if engine != nil {
-			engine.AddMapping(domain, ip, ttl)
-		}
-	})
 	log.Println("Traffic Engine started")
-	<-sigExit
+	// 阻塞等待退出信号
+	<-ctx.Done()
 
 	log.Println("shutting down...")
-	cancel()
+	time.Sleep(500 * time.Millisecond)
 
 	log.Println("bye")
 }
