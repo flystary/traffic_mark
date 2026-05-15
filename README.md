@@ -22,16 +22,16 @@
 ## 📂 目录结构
 ```text
 ├── controller/              # 数据面（加载/管理）和控制面（逻辑/下发 (Go代码)
-│   ├── config.go             # 静态策略配置 (域名与 Mark 对应关系)
+│   ├── config.go            # 静态策略配置 (域名与 Mark 对应关系)
 │   ├── engine.go.           # Go 控制面核心逻辑
 │   ├── main.go              # Go 项目入口
-│   ├── traffic_mark.bpf.c    # eBPF 内核逻辑 (与数据面共享)
+│   ├── traffic_mark.bpf.c   # eBPF 内核逻辑 (与数据面共享)
 │   └── watcher.go           # 域名/IP 变化监控
 ├── dataplane-cpp/              # 数据面 (eBPF 内核代码与加载器)
-│   ├── traffic_mark.bpf.c   # eBPF 内核逻辑
-│   ├── loader.cpp          # C++ 加载器程序
-│   ├── Makefile             # 编译与环境预检工具
-│   └── traffic_mark.skel.h  # 自动生成的 BPF 骨架 (编译后生成)
+│   ├── traffic_mark.bpf.c      # eBPF 内核逻辑
+│   ├── loader.cpp              # C++ 加载器程序
+│   ├── Makefile                # 编译与环境预检工具
+│   └── traffic_mark.skel.h     # 自动生成的 BPF 骨架 (编译后生成)
 ├── engine.go             # Go 控制面核心逻辑
 ├── watcher.go            # 域名/IP 变化监控
 ├── main.go               # Go 项目入口
