@@ -40,15 +40,6 @@ func (o *TrafficObjects) Close() error {
 	return nil
 }
 
-func loadRules() map[string]uint32 {
-	return map[string]uint32{
-		"google.com": 100,
-		"github.com": 200,
-		"baidu.com":  300,
-	        "shifen.com": 300,
-	}
-}
-
 const bpfFSPath = "/sys/fs/bpf"
 
 
@@ -99,7 +90,7 @@ func main() {
 	log.Printf("Map 指针: %p, Program指针 Egress: %p, Ingress: %p,", objs.IpMarks, objs.DoMarkEgress, objs.DoMarkIngress)
 
 	// Engine
-	engine := NewEngine(objs.IpMarks, loadRules())
+	engine := NewEngine(objs.IpMarks, LoadRules())
 	if engine == nil {
 		log.Fatal("engine init failed")
 	}
@@ -145,7 +136,7 @@ func main() {
 	go func() {
 		for range sigReload {
 			log.Println("SIGHUP: reload rules")
-			engine.Reload(loadRules())
+			engine.Reload(LoadRules())
 		}
 	}()
 
