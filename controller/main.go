@@ -43,7 +43,7 @@ func main() {
 		m.Pinning = ebpf.PinByName
 	}
 
-	var objs TrafficObjects
+	var objs TrafficMarkObjects
 	opts := ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{PinPath: bpfFSPath},
 	}

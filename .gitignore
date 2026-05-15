@@ -6,4 +6,7 @@
 /dataplane/loader
 /dataplane/traffic_loader
 /*.o
+/*_bpfel.*
+/controller/*_bpfel.*
+/controller/traffic_engine
 /ebpf
