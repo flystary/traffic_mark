@@ -68,7 +68,7 @@ func (m *InterfaceManager) scanAndAttach() {
 			// 传入网卡的 Index 和 Name
 			if err := m.attachNative(iface.Index, iface.Name); err == nil {
 				m.mounted.Store(iface.Name, true)
-				log.Printf("[eBPF] 成功原生挂载至新网卡: %s (Index: %d)", iface.Name, iface.Index)
+				log.Printf("[eBPF] 成功挂载新网卡: %s (Index: %d)", iface.Name, iface.Index)
 			} else {
 				log.Printf("[eBPF] 挂载至网卡 %s 失败: %v", iface.Name, err)
 			}
