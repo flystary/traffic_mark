@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,22 +17,41 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-const bpfFSPath = "/sys/fs/bpf"
+const (
+	bpfFSPath  = "/sys/fs/bpf"
+	bpfMapName = "ip_marks"
+)
+
+// checkBPFFS 确保 BPF 文件系统已正确挂载
+func checkBPFFS() error {
+	if err := os.MkdirAll(bpfFSPath, 0700); err != nil {
+		log.Fatalf("Failed to create bpf fs directory: %v", err)
+		return err
+	}
+	err := syscall.Mount("bpf", bpfFSPath, "bpf", 0, "")
+	if err != nil {
+		// EBUSY，说明系统已经挂载过
+		if errno, ok := err.(syscall.Errno); ok && errno == syscall.EBUSY {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
 
 func main() {
 	// 解除内存锁限制（eBPF 必须）
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatalf("无法解除内存限制: %v", err)
 	}
+	if err := checkBPFFS(); err != nil {
+		log.Fatalf("初始化 BPF 文件系统失败 (请确保以 sudo 权限运行): %v", err)
+	}
 	// 信号与上下文管理
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// 加载 eBPF 资源
-	if err := os.MkdirAll(bpfFSPath, 0755); err != nil {
-		log.Fatalf("Failed to create bpf fs directory: %v", err)
-	}
-
 	spec, err := LoadTrafficMark()
 	if err != nil {
 		log.Fatalf("Failed to load bpf spec: %v", err)
@@ -40,6 +60,12 @@ func main() {
 	// 在真正加载到内核前，修改 Map 的 Pinning 策略
 	if m, ok := spec.Maps["ip_marks"]; ok {
 		m.Pinning = ebpf.PinByName
+	}
+	// 强制清理历史残留的 Map 文件
+	residualMapPath := filepath.Join(bpfFSPath, bpfMapName)
+	if _, err := os.Stat(residualMapPath); err == nil {
+		log.Println("清理运行残留的旧 Map 文件")
+		_ = os.Remove(residualMapPath)
 	}
 
 	var objs TrafficMarkObjects
