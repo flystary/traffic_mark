@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -54,20 +53,6 @@ func main() {
 	}
 	defer objs.Close()
 
-	progEgressPath := filepath.Join(bpfFSPath, "prog_egress")
-	progIngressPath := filepath.Join(bpfFSPath, "prog_ingress")
-
-	// 强制刷新 Pin 文件
-	os.Remove(progEgressPath)
-	os.Remove(progIngressPath)
-
-	if err := objs.DoMarkEgress.Pin(progEgressPath); err != nil {
-		log.Fatalf("无法 Pin Egress 程序: %v", err)
-	}
-	if err := objs.DoMarkIngress.Pin(progIngressPath); err != nil {
-		log.Fatalf("无法 Pin Ingress 程序: %v", err)
-	}
-
 	// log.Printf("Map 指针: %p, Program指针 Egress: %p, Ingress: %p,", objs.IpMarks, objs.DoMarkEgress, objs.DoMarkIngress)
 
 	// Engine
@@ -78,7 +63,7 @@ func main() {
 	}
 
 	// 初始化网卡挂载管理器
-	ifaceMgr := NewInterfaceManager(progEgressPath, progIngressPath)
+	ifaceMgr := NewInterfaceManager(objs.DoMarkIngress.FD(), objs.DoMarkEgress.FD())
 
 	// 动态网卡监听与 TC 挂载
 	go ifaceMgr.Watch(ctx)
@@ -113,7 +98,7 @@ func main() {
 	<-ctx.Done()
 
 	log.Println("shutting down...")
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(800 * time.Millisecond)
 
 	log.Println("bye")
 }
