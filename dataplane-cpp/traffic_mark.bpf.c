@@ -26,6 +26,16 @@ struct
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } ip_marks SEC(".maps");
 
+/*
+struct bpf_map_def SEC("maps") ip_marks = {
+    .type        = BPF_MAP_TYPE_LPM_TRIE,
+    .key_size    = sizeof(struct ip_key),
+    .value_size  = sizeof(__u32),
+    .max_entries = 65535,
+    .map_flags   = BPF_F_NO_PREALLOC,
+};
+*/
+
 SEC("classifier/egress")
 int do_mark_egress(struct __sk_buff *skb)
 {
