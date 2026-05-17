@@ -50,9 +50,9 @@ int do_mark_egress(struct __sk_buff *skb)
     if (mark)
     {
         skb->mark = *mark;
-        bpf_printk("Match! daddr=%pI4, mark=%d\n",
-                   &iph->daddr,
-                   *mark);
+        // bpf_printk("Match! daddr=%pI4, mark=%d\n",
+        //           &iph->daddr,
+        //           *mark);
     }
 
     return TC_ACT_OK;
@@ -86,9 +86,9 @@ int do_mark_ingress(struct __sk_buff *skb)
     if (mark)
     {
         skb->mark = *mark;
-        bpf_printk("Match! saddr=%pI4, mark=%d\n",
-                   &iph->saddr,
-                   *mark);
+        // bpf_printk("Match! saddr=%pI4, mark=%d\n",
+        //           &iph->saddr,
+        //           *mark);
     }
 
     return TC_ACT_OK;
