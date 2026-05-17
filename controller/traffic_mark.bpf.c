@@ -7,6 +7,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+// 定义低 20 位的掩码
+#define MY_LOW_MASK 0x000FFFFF
+
 struct ip_key
 {
     __u32 prefixlen;
@@ -49,10 +52,11 @@ int do_mark_egress(struct __sk_buff *skb)
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
     {
-        skb->mark = *mark;
-        // bpf_printk("Match! daddr=%pI4, mark=%d\n",
-        //           &iph->daddr,
-        //           *mark);
+        skb->mark = (skb->mark & ~MY_LOW_MASK) | (*mark & MY_LOW_MASK);
+        __u32 current_mark = skb->mark;
+        bpf_printk("Match! daddr=%pI4, mark=%d\n",
+                   &iph->daddr,
+                   current_mark);
     }
 
     return TC_ACT_OK;
@@ -85,10 +89,11 @@ int do_mark_ingress(struct __sk_buff *skb)
     __u32 *mark = bpf_map_lookup_elem(&ip_marks, &key);
     if (mark)
     {
-        skb->mark = *mark;
-        // bpf_printk("Match! saddr=%pI4, mark=%d\n",
-        //           &iph->saddr,
-        //           *mark);
+        skb->mark = (skb->mark & ~MY_LOW_MASK) | (*mark & MY_LOW_MASK);
+        __u32 current_mark = skb->mark;
+        bpf_printk("Match! saddr=%pI4, mark=%d\n",
+                   &iph->saddr,
+                   current_mark);
     }
 
     return TC_ACT_OK;
