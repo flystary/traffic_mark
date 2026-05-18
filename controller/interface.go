@@ -113,7 +113,7 @@ func (m *InterfaceManager) attachNative(ifIndex int, ifName string) error {
 	ingressFilter := &netlink.BpfFilter{
 		FilterAttrs:  filterAttrs,
 		Fd:           m.ingressProgFd, // 纯 Go 直接传递内核中的 eBPF 程序句柄
-		Name:         "clash-ingress-" + ifName,
+		Name:         "tc-ingress-" + ifName,
 		DirectAction: true,
 	}
 
@@ -134,7 +134,7 @@ func (m *InterfaceManager) attachNative(ifIndex int, ifName string) error {
 	egressFilter := &netlink.BpfFilter{
 		FilterAttrs:  filterAttrsEgress,
 		Fd:           m.egressProgFd, // 纯 Go 直接传递内核中的 eBPF 程序句柄
-		Name:         "clash-egress-" + ifName,
+		Name:         "tc-egress-" + ifName,
 		DirectAction: true,
 	}
 
