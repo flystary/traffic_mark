@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -15,6 +17,9 @@ import (
 const bpfFSPath = "/sys/fs/bpf/ip_marks"
 
 func main() {
+	go func() {
+		log.Println(http.ListenAndServe(":8080", nil))
+	}()
 	// 创建全局唯一的上下文，监听系统退出信号 (SIGINT, SIGTERM)
 	// 当按下 Ctrl+C 或收到 kill 信号时，ctx.Done() 会关闭
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

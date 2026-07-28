@@ -4,6 +4,9 @@ package main
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target arm64 -cflags "-I/usr/include/aarch64-linux-gnu" TrafficMark traffic_mark.bpf.c
 
 import (
+	"net/http"
+	_ "net/http/pprof"
+
 	"context"
 	"log"
 	"net"
@@ -24,7 +27,7 @@ const (
 
 // checkBPFFS 确保 BPF 文件系统已正确挂载
 func checkBPFFS() error {
-	if err := os.MkdirAll(bpfFSPath, 0700); err != nil {
+	if err := os.MkdirAll(bpfFSPath, 0755); err != nil {
 		log.Fatalf("Failed to create bpf fs directory: %v", err)
 		return err
 	}
@@ -40,6 +43,10 @@ func checkBPFFS() error {
 }
 
 func main() {
+	go func() {
+		log.Println(http.ListenAndServe(":8080", nil))
+	}()
+
 	// 解除内存锁限制（eBPF 必须）
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatalf("无法解除内存限制: %v", err)
@@ -48,7 +55,7 @@ func main() {
 		log.Fatalf("初始化 BPF 文件系统失败 (请确保以 sudo 权限运行): %v", err)
 	}
 	// 信号与上下文管理
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	// 加载 eBPF 资源
@@ -57,7 +64,7 @@ func main() {
 		log.Fatalf("Failed to load bpf spec: %v", err)
 	}
 
-	// 在真正加载到内核前，修改 Map 的 Pinning 策略
+	// 修改 Map 的 Pinning 策略
 	if m, ok := spec.Maps["ip_marks"]; ok {
 		m.Pinning = ebpf.PinByName
 	}
